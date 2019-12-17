@@ -40,7 +40,8 @@ library(dplyr)
 
 
 ```{r}
-
+# presentation URL
+# https://docs.google.com/presentation/d/1JsFo1aZLjFzoxR07KBhyvr2nSSxolx78I_56WXiaL4k/edit#slide=id.g6c54fe206c_0_118
 
 # Import data
 
