@@ -1,0 +1,632 @@
+---
+title: "child_aggression.project"
+output: html_document
+---
+
+```{r}
+install.packages("pvclust")
+install.packages("neuralnet")
+```
+
+
+```{r}
+
+library(ggplot2)
+library(tidyverse)
+library(ggfortify)
+library(fastICA)
+library(RCurl)
+library(fastICA)
+library(corrplot)
+library(readxl)
+library(factoextra)
+library(cluster)
+library(pvclust)
+library(randomForest)
+library(MASS)
+library(caret)
+library(pROC)
+library(gbm)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(grid)
+library(libcoin)
+library(neuralnet)
+library(dplyr)
+
+```
+
+
+
+```{r}
+
+
+# Import data
+
+child_aggression <- read_xlsx("childaggression.UK.US.xlsx")
+
+# DATA WRANGLING
+
+str(child_aggression) # shows columns of null values that act as separators in excel file
+
+# Divide data into 3 subsets: combined, UK and US. Select predictor variables only.
+
+combined <- child_aggression[,2:6]
+
+UK <- child_aggression[,10:14]
+
+US <- child_aggression[,17:21]
+
+# Inspection of data
+
+head(combined)
+head(UK)
+head(US)
+
+# Normalise data
+
+combined <- as.data.frame(scale(combined))
+UK <- as.data.frame(scale(UK))
+US <- as.data.frame(scale(US))
+
+# Re-inspect
+
+head(combined)
+head(UK)
+head(US)
+
+# Summary statistics
+
+summary(combined) # no null values
+summary(UK) # null values present from arrangement of data ie columns have been 'padded out' with null values so that they match the COMBINED data set columns in length. Therefore, these do not represent true null values.
+summary(US) # null values present from arrangement of data, as in UK data.
+
+# Remove null values
+
+UK <- na.omit(UK)
+US <- na.omit(US)
+
+# Confirm removal of null values
+
+summary(UK)
+summary(US)
+
+# INSPECT DISTRIBUTION OF PREDICTOR VARIABLES
+
+UK %>%
+  gather(attributes, value, 1:5) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(fill = 'lightblue2', color = 'black') +
+  facet_wrap(~attributes, scales = 'free_x') +
+  labs(x="Values", y="Frequency") +
+  theme_bw()
+
+US %>%
+  gather(attributes, value, 1:5) %>%
+  ggplot(aes(x = value)) +
+  geom_histogram(fill = 'lightblue2', color = 'black') +
+  facet_wrap(~attributes, scales = 'free_x') +
+  labs(x="Values", y="Frequency") +
+  theme_bw()
+
+# predictor variables in both subsets are normally distributed
+
+# EXPLORE CORRELATIONS
+
+# Filter to numeric columns for correlation
+
+corrplot(cor(combined), method = 'color')
+corrplot(cor(UK), method = 'color')
+corrplot(cor(US), method = 'color')
+
+# Graphical method of exploring correlations
+
+# https://www.r-bloggers.com/five-ways-to-visualize-your-pairwise-comparisons/
+panel.cor <- function(x, y, digits=2, prefix="", cex.cor) 
+{
+    usr <- par("usr"); on.exit(par(usr)) 
+    par(usr = c(0, 1, 0, 1)) 
+    r <- abs(cor(x, y)) 
+    txt <- format(c(r, 0.123456789), digits=digits)[1] 
+    txt <- paste(prefix, txt, sep="") 
+    if(missing(cex.cor)) cex <- 0.8/strwidth(txt) 
+ 
+    test <- cor.test(x,y) 
+    # borrowed from printCoefmat
+    Signif <- symnum(test$p.value, corr = FALSE, na = FALSE, 
+                  cutpoints = c(0, 0.001, 0.01, 0.05, 0.1, 1),
+                  symbols = c("***", "**", "*", ".", " ")) 
+ 
+    text(0.5, 0.5, txt, cex = cex * r) 
+    text(.8, .8, Signif, cex=cex, col=2) 
+}
+
+pairs(Combined, lower.panel=panel.smooth, upper.panel=panel.cor)
+
+# relationship between Parental Approach and Videos
+ggplot(data = combined, aes(x = combined$`Parental Approach`, y = combined$Videos)) +
+  geom_point() +
+  geom_smooth(method = 'lm', se = FALSE, color = 'red') +
+  theme_bw()
+
+```
+
+```{r}
+
+# Explore relationships between features and Aggression (outcome)
+
+UK <- child_aggression[,9:14]
+
+US <- child_aggression[,16:21]
+
+UK <- exp(UK)
+US <- exp(US)
+
+country <- rep('UK', nrow(UK))
+country <- c(country, rep('US', nrow(US)))
+df <- UK
+colnames(df) <- gsub('UK', 'US', colnames(df))
+df <- rbind(df, US)
+colnames(df) <- gsub('US', '', colnames(df))
+df$country <- country
+
+ggplot(df, aes(x=Video, y=Agg, color=country)) + 
+    geom_point() + ggtitle('Videos') + theme_bw()
+ggplot(df, aes(x=Elect, y=Agg, color=country)) + 
+    geom_point() + ggtitle('Electronic Games') + theme_bw()
+ggplot(df, aes(x=Sib, y=Agg, color=country)) + 
+    geom_point() + ggtitle('Sibbling aggression') + theme_bw()
+ggplot(df, aes(x=Nut, y=Agg, color=country)) + 
+    geom_point() + ggtitle('Nutrition') + theme_bw()
+ggplot(df, aes(x=Par, y=Agg, color=country)) + 
+    geom_point() + ggtitle('Parental Approach') + theme_bw()
+
+# distribution of aggression
+
+ggplot(df, aes(x=Agg)) + 
+    geom_histogram() + ggtitle('Aggression distribution') + theme_bw()
+
+
+```
+
+
+```{r}
+
+# UNSUPERVISED MACHINE LEARNING
+
+# PCA for dimension reduction
+
+# 1) Compute PCA (individually for the three subsets)
+
+combined_pca <- prcomp(combined) 
+autoplot(combined_pca) # scatter plot with percentage variance of PCs
+
+UK_pca <- prcomp(UK)
+autoplot(UK_pca)
+
+US_pca <- prcomp(US) 
+autoplot(US_pca)
+
+# 2) Determine the minimum number of principal components that account for most of the variation in the data, from visualisation of eigen values.
+
+fviz_eig(combined_pca) # PC1 and PC2 accounts for most of the variation
+
+fviz_eig(UK_pca) # PC1 and PC2 accounts for most of the variation
+
+fviz_eig(US_pca) # PC1 and PC2 accounts for most of the variation
+
+# 3) Interpret each principal component in terms of the original variables.
+
+fviz_pca_var(combined_pca,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+
+fviz_pca_var(UK_pca,
+             col.var = "contrib", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     
+             )
+
+fviz_pca_var(US_pca,
+             col.var = "contrib", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     
+             )
+
+# All features demonstrate sufficient vector length to be included in an unsupervised approach
+
+
+```
+
+```{r}
+
+# K-MEANS CLUSTERING
+
+# Determining the optimal number of clusters using the average silhouette method
+
+fviz_nbclust(x = combined, FUNcluster = kmeans, method = 'silhouette') # k = 2
+
+# Compute k-means clustering with k = 2
+set.seed(123)
+combined_kmeans <- kmeans(combined, centers = 2, nstart = 25)
+print(combined_kmeans)
+
+# This method has produced 2 clusters.
+
+# color-coded PCA plot
+set.seed(1)
+fviz_cluster(combined_kmeans, data = combined)
+
+```
+
+```{r}
+
+# HIERARCHICAL CLUSTERING
+
+# Calculate the dissimilarity matrix to determine the clustering tendency
+# Correlation-based distance method
+combined.dist <- get_dist(combined, method = "pearson")
+
+# Visualize the dissimilarity matrix  
+fviz_dist(combined.dist, lab_size = 8) # red color corresponds to small distances and blue color indicates big distances between observations. Shows relatively uniform clustering tendency, suggesting divisive approach may be best.
+
+# Compute with DIANA (acronym for divisive analysis) - assumes that all of the observations belong to a single cluster and then divides the clusters into two least similar clusters. This is repeated recursively on each cluster until there is one cluster for each observation. Top-down approach cf. bottom-up for agglomerative. 
+
+# compute divisive hierarchical clustering
+set.seed(123)
+combined.diana <- diana(combined)
+
+# Divise coefficient; amount of clustering structure found
+combined.diana$dc
+## [1] 0.906812
+
+# plot dendrogram
+pltree(combined.diana, cex = 0.6, hang = -1, main = "Dendrogram of diana")
+
+# Cut diana tree into 5 groups
+
+combined.diana5 <- cutree(as.hclust(combined.diana), k = 5)
+
+# color coded PCA plot with diana clusters
+
+set.seed(1)
+fviz_cluster(list(data = combined, cluster = combined.diana5))
+
+# AGGLOMERATIVE CLUSTERING
+
+# Linkage type: complete linkage and Ward’s method are generally preferred.
+
+set.seed(123)
+combined_euc <- dist(combined, method = "euclidean") # euclidean distance metric
+combined_euc.com <- hclust(combined_euc, method = "complete") # complete linkage
+plot(combined_euc.com) # plot tree, no. of clusters 3 
+combined_euc.com3 <- cutree(combined_euc.com, k = 3) # cut into 3 clusters
+set.seed(1)
+fviz_cluster(list(data = combined, cluster = combined_euc.com3)) # visualize clusters
+
+set.seed(123)
+combined_man <- dist(combined, method = "manhattan") # manhattan distance metric
+combined_man.av <- hclust(combined_man, method = "average") # average linkage
+plot(combined_man.av) # plot tree, unclear where to cut
+
+# AGNES - acronym for agglomerative nesting
+
+# Agglomerative coefficient: measures the amount of clustering structure found (values closer to 1 suggest strong clustering structure)
+
+# method to assess which linkage method is best
+m <- c( "average", "single", "complete", "ward")
+names(m) <- c( "average", "single", "complete", "ward")
+
+# function to compute coefficient
+ac <- function(x) {
+  agnes(combined, method = x)$ac
+}
+
+map_dbl(m, ac)
+
+combined.agnes <- agnes(combined, method = "ward")
+pltree(combined.agnes, cex = 0.6, hang = -1, main = "Dendrogram of agnes") 
+
+# Cut agnes() tree into 3 groups
+
+combined.agnes3 <- cutree(as.hclust(combined.agnes), k = 3)
+
+fviz_cluster(list(data = combined, cluster = combined.agnes3))
+
+result <- parPvclust(data = combined, method.hclust = "ward", method.dist = "cor",  nboot = 10000)
+print(result, digit=5)
+
+
+
+seplot(result)
+
+plot(result)
+pvrect(result, alpha = 0.95)
+
+
+```
+
+```{r}
+
+# SUPERVISED LEARNING
+
+child_aggression <- read_xlsx("childaggression.UK.US.xlsx")
+
+# create dataset to include both predictors and outcome
+Combined <- child_aggression[,1:6]
+ 
+# vary log levels
+Combined <- exp(Combined)
+Combined$Aggression <- log(Combined$Aggression)
+Combined$Aggression <- exp(Combined$Aggression)
+
+
+# set seed to make results reproducible 
+set.seed(29)
+
+# split data into train and test subsets, 500 and 166 respectively 
+train = sample(1:nrow(Combined), 500)
+
+train_output <- Combined[train, ]
+test_output <- Combined[-train, ]
+
+# LINEAR MODEL
+
+# Multiple regression model that includes all features
+
+linearmodel <-lm(Aggression ~., data = train_output)
+
+# DETERMINE BEST COMBINATION OF FEATURES USING STEPWISE REGRESSION
+
+# STEP 1: multiple regression model
+FitAll <- lm(Aggression ~., data = train_output)
+summary(FitAll)
+
+# STEP 2: Linear model using intercept only i.e. no features
+FitStart <- lm(Aggression ~1, data = train_output)
+summary(FitStart)
+
+# STEP 3: Linear model based on forward selection
+step(FitStart, direction = "forward", scope = formula(FitAll))
+
+# STEP 4: Linear model combining forward and backward selection
+step(FitStart, direction = "both", scope = formula(FitAll))
+
+# BEST MODEL FROM FORWARD AND BACKWARD STEPWISE REGRESSION
+
+linearmodel <-lm(formula = Aggression ~ `Parental Approach` + `Electronic Games` + 
+    `sibling agg` + Nutrition, data = train_output)
+
+```
+
+```{r}
+
+# RESIDUALS analysis
+
+# grab residuals
+res <- residuals(linearmodel)
+
+# Convert to DataFrame for ggplot
+res <- as.data.frame(res)
+
+head(res)
+
+# Histogram of residuals
+ggplot(res,aes(res)) +  geom_histogram(fill='blue',alpha=0.5) + theme_bw()
+# histogram shows normal distribution of residuals
+
+autoplot(linearmodel, smooth.colour = NA)
+```
+
+```{r}
+
+# LINEAR REGRESSION PREDICTION  
+
+# Use model on test set, predict aggression 
+linearmodel.pred <- predict(linearmodel, data = test_output)
+
+# produce dataframe of results
+results <- cbind(linearmodel.pred,test_output$Aggression) 
+colnames(results) <- c('pred','real')
+results <- as.data.frame(results)
+
+# MSE (mean squared error)
+mse <- mean((results$real-results$pred)^2)
+mse
+
+# root mean squared error
+mse^0.5
+
+# R-squared value
+SSE = sum((results$pred - results$real)^2)
+SST = sum( (mean(Combined$Aggression) - results$real)^2)
+
+R2 = 1 - SSE/SST
+R2
+
+```
+
+
+```{r}
+
+# Random forest
+
+set.seed(123)
+colnames(train_output) <- gsub(' ', '_', colnames(train_output))
+colnames(test_output)  <- gsub(' ', '_', colnames(test_output))
+rf <- randomForest(Aggression ~ ., data = train_output)
+rf
+
+plot(rf)
+
+# Use model on test set, predict aggression 
+rf.pred <- predict(rf, data = test_output)
+
+# produce dataframe of results
+results <- cbind(rf.pred, test_output$Aggression) 
+colnames(results) <- c('pred','real')
+results <- as.data.frame(results)
+
+# MSE (mean squared error)
+mse <- mean((results$real-results$pred)^2)
+mse
+
+# root mean squared error
+mse^0.5
+
+# R-squared value
+SSE = sum((results$pred - results$real)^2)
+SST = sum( (mean(Combined$Aggression) - results$real)^2)
+
+R2 = 1 - SSE/SST
+R2
+
+```
+
+```{r}
+
+# Regression Tree (Conditional Inference method)
+
+# Conditional Inference Trees use a significance test procedure to select variables at each split. This overcomes a variable selection bias in the algorithms used in the traditional CART-based trees. Traditional approaches tend to select variables that have many possible splits or many missing values.
+
+# set seed to make results reproducible 
+set.seed(29)
+
+# model 
+ctree.fit <- ctree(Aggression ~ ., 
+                   data = train_output,
+                   control = ctree_control(maxdepth = Inf)) 
+# 'maxdepth = Inf' means no restrictions are applied to tree size
+
+# EVALUATION OF MODEL
+
+# display the details of the tree
+print(ctree.fit) 
+
+# plot decision tree
+plot(ctree.fit,
+     main = "Regression CTree for Aggression") 
+
+# Use model on test set, predict medv 
+ctree.pred = predict(ctree.fit, test_output)
+
+# R-squared evaluation of predictions
+cor(ctree.pred,test_output$Aggression)^2 
+
+```
+
+```{r}
+
+# SVM
+
+# set seed to make results reproducible 
+set.seed(29)
+
+
+control = trainControl(method = "repeatedcv", repeats = 5, classProbs = F, savePredictions = T)
+
+svm.linear = train(Aggression ~ ., data = train_output, method = "svmLinear", tuneLength = 10, trControl = control)
+
+svm.linear
+
+svm.linear_test = predict(svm.linear, newdata = test_output)
+
+# produce dataframe of results
+results <- cbind(svm.linear_test,test_output$Aggression) 
+colnames(results) <- c('pred','real')
+results <- as.data.frame(results)
+
+# MSE (mean squared error)
+mse <- mean((results$real-results$pred)^2)
+mse
+
+# root mean squared error
+mse^0.5
+
+# R-squared value
+SSE = sum((results$pred - results$real)^2)
+SST = sum( (mean(Combined$Aggression) - results$real)^2)
+
+R2 = 1 - SSE/SST
+R2 
+
+
+```
+
+```{r}
+
+# STRATIFY OUTCOME
+
+child_aggression <- read_xlsx("childaggression.UK.US.xlsx")
+
+# create dataset to include both predictors and outcome
+Combined <- child_aggression[,1:6]
+ 
+# vary log levels
+Combined <- exp(Combined)
+
+
+
+# find limits of aggression
+range(Combined$Aggression) # 0.3166368 3.2543742
+
+# create subset of aggression that is relatively the highest in this dataset
+Aggression_high <-subset(Combined, Aggression > 2.5)# 4
+
+# create subset of aggression that is relatively the lowest in this dataset
+Aggression_low <- subset(Combined, Aggression < 1.0)#335
+
+# combine both high and low aggression subsets
+working_dataset <- rbind(Aggression_high,Aggression_low)
+
+# check distribution of new dataset
+hist(working_dataset$Aggression)
+
+# create binary outcome
+working_dataset$Aggression[working_dataset$Aggression>2.5] <- 1
+working_dataset$Aggression[working_dataset$Aggression<1.0] <- 0
+
+
+# set seed to make results reproducible 
+set.seed(29)
+
+# split data into train and test subsets, 254 and 85 respectively 
+train = sample(1:nrow(working_dataset), 254)
+
+train_output <- working_dataset[train, ]
+test_output <- working_dataset[-train, ]
+
+# LINEAR MODEL
+
+linearmodel<-lm(formula = Aggression ~ ., 
+    data = train_output)
+
+# Use model on test set, predict aggression 
+linearmodel.pred <- predict(linearmodel, data = test_output)
+
+# produce dataframe of results
+results <- cbind(linearmodel.pred,test_output$Aggression) 
+colnames(results) <- c('pred','real')
+results <- as.data.frame(results)
+
+# MSE (mean squared error)
+mse <- mean((results$real-results$pred)^2)
+mse
+
+# root mean squared error
+mse^0.5
+
+# R-squared value
+SSE = sum((results$pred - results$real)^2)
+SST = sum( (mean(working_dataset$Aggression) - results$real)^2)
+
+R2 = 1 - SSE/SST
+R2
+
+# go back to SVM and random forest blocks of code and retry with working_dataset
+
+```
+
